@@ -573,9 +573,20 @@ function openApplicationForm(iso) {
         <label>Dünger</label>
         <select id="app-fert">${fertOptions}</select>
       </div>
+
+      <div class="calc-box" id="calc-box">
+        <label>Menge anhand eines Nährstoffs berechnen (optional)</label>
+        <div class="calc-row">
+          <select id="calc-nutrient"></select>
+          <input type="number" id="calc-target-gm2" step="0.01" min="0" placeholder="z. B. 3 (g/m²)">
+        </div>
+        <p class="card-sub" id="calc-result"></p>
+        <button type="button" class="btn btn-secondary" id="calc-apply-btn" disabled style="width:100%;margin-top:8px;">In Menge übernehmen</button>
+      </div>
+
       <div class="form-group">
         <label>Menge (kg Produkt gesamt)</label>
-        <input type="number" id="app-amount" required min="0.01" step="0.01" placeholder="z. B. 2.5">
+        <input type="number" id="app-amount" required min="0.001" step="0.001" placeholder="z. B. 2.5">
       </div>
       <p class="card-sub" id="app-preview"></p>
       <button type="submit" class="btn btn-primary">Speichern</button>
@@ -595,6 +606,60 @@ function openApplicationForm(iso) {
   };
   document.getElementById('app-lawn').addEventListener('change', updatePreview);
   document.getElementById('app-amount').addEventListener('input', updatePreview);
+
+  let calcProductKg = null;
+
+  const populateCalcNutrients = () => {
+    const fert = fertilizerById(document.getElementById('app-fert').value);
+    const keys = fert ? Object.keys(fert.nutrients || {}) : [];
+    const sel = document.getElementById('calc-nutrient');
+    sel.innerHTML = keys.map(k => `<option value="${escapeAttr(k)}">${escapeHtml(k)}</option>`).join('');
+    document.getElementById('calc-box').style.display = keys.length ? '' : 'none';
+  };
+
+  const updateCalc = () => {
+    const lawn = lawnById(document.getElementById('app-lawn').value);
+    const fert = fertilizerById(document.getElementById('app-fert').value);
+    const nutrientKey = document.getElementById('calc-nutrient').value;
+    const targetGm2 = parseFloat(document.getElementById('calc-target-gm2').value);
+    const resultEl = document.getElementById('calc-result');
+    const applyBtn = document.getElementById('calc-apply-btn');
+    const pct = fert && nutrientKey ? fert.nutrients[nutrientKey] : undefined;
+
+    if (!lawn || !fert || !nutrientKey || !targetGm2 || targetGm2 <= 0) {
+      resultEl.textContent = '';
+      applyBtn.disabled = true;
+      calcProductKg = null;
+      return;
+    }
+    if (!pct || pct <= 0) {
+      resultEl.textContent = `${fert.name} enthält keinen ${nutrientKey}-Anteil.`;
+      applyBtn.disabled = true;
+      calcProductKg = null;
+      return;
+    }
+    const totalNutrientG = targetGm2 * lawn.sizeM2;
+    const productKg = (totalNutrientG / (pct / 100)) / 1000;
+    calcProductKg = productKg;
+    resultEl.textContent = `→ ${fmtNum(productKg, 3)} kg ${fert.name} für die gesamte Fläche (${fmtNum(lawn.sizeM2, 0)} m²)`;
+    applyBtn.disabled = false;
+  };
+
+  populateCalcNutrients();
+  updateCalc();
+
+  document.getElementById('app-fert').addEventListener('change', () => {
+    populateCalcNutrients();
+    updateCalc();
+  });
+  document.getElementById('app-lawn').addEventListener('change', updateCalc);
+  document.getElementById('calc-nutrient').addEventListener('change', updateCalc);
+  document.getElementById('calc-target-gm2').addEventListener('input', updateCalc);
+  document.getElementById('calc-apply-btn').addEventListener('click', () => {
+    if (calcProductKg == null) return;
+    document.getElementById('app-amount').value = calcProductKg.toFixed(3);
+    updatePreview();
+  });
 
   document.getElementById('app-form').addEventListener('submit', (e) => {
     e.preventDefault();
