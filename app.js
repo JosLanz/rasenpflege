@@ -19,7 +19,12 @@ statsYear = today.getFullYear();
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const data = JSON.parse(raw);
+      // Bestehende Düngungen aus der Zeit vor der Planungsfunktion gelten als bereits ausgebracht.
+      (data.applications || []).forEach(a => { if (a.confirmed === undefined) a.confirmed = true; });
+      return data;
+    }
   } catch (e) { /* ignore corrupt data */ }
   return { lawns: [], fertilizers: [], applications: [] };
 }
@@ -76,11 +81,12 @@ function productGPerM2(app) {
   return (app.amountKg * 1000) / lawn.sizeM2;
 }
 
-/* aggregierte Nährstoffe (g/m²) für einen Rasen in einem Jahr: { N: x, P: y, ... } */
-function nutrientTotalsForLawnYear(lawnId, year) {
+/* aggregierte Nährstoffe (g/m²) für einen Rasen in einem Jahr: { N: x, P: y, ... }
+   onlyConfirmed=true zählt nur bereits ausgebrachte (bestätigte) Düngungen, sonst alle (bestätigt + geplant) */
+function nutrientTotalsForLawnYear(lawnId, year, onlyConfirmed = false) {
   const totals = {};
   state.applications
-    .filter(a => a.lawnId === lawnId && new Date(a.date + 'T00:00:00').getFullYear() === year)
+    .filter(a => a.lawnId === lawnId && new Date(a.date + 'T00:00:00').getFullYear() === year && (!onlyConfirmed || a.confirmed))
     .forEach(a => {
       const fert = fertilizerById(a.fertilizerId);
       if (!fert) return;
@@ -90,6 +96,25 @@ function nutrientTotalsForLawnYear(lawnId, year) {
       });
     });
   return totals;
+}
+
+/* Planungsstatus einer Düngung: 'done' (bestätigt), 'overdue' (Termin verstrichen, unbestätigt), 'planned' (zukünftig, unbestätigt) */
+function appStatus(a) {
+  if (a.confirmed) return 'done';
+  return a.date < isoDate(today) ? 'overdue' : 'planned';
+}
+
+function appStatusLabel(status) {
+  return { done: '✅ Bestätigt', planned: '🕓 Geplant', overdue: '⚠️ Überfällig' }[status] || '';
+}
+
+/* "schlimmster" Status mehrerer Düngungen desselben Tages, für die Kalender-Einfärbung */
+function dayStatus(dayApps) {
+  if (!dayApps || !dayApps.length) return null;
+  const statuses = dayApps.map(appStatus);
+  if (statuses.includes('overdue')) return 'overdue';
+  if (statuses.includes('planned')) return 'planned';
+  return 'done';
 }
 
 /* ---------- Modal ---------- */
@@ -552,10 +577,10 @@ function renderCalendarView() {
   const weekdayHeader = WEEKDAYS.map(w => `<div class="cal-weekday">${w}</div>`).join('');
   const dayCells = cells.map(c => {
     if (c.otherMonth) return `<div class="cal-day other-month">${c.day}</div>`;
-    const hasEntry = appsByDate[c.iso] && appsByDate[c.iso].length > 0;
+    const status = dayStatus(appsByDate[c.iso]);
     const isToday = c.iso === todayIso;
-    return `<div class="cal-day${hasEntry ? ' has-entry' : ''}${isToday ? ' today' : ''}" data-date="${c.iso}">
-      ${c.day}${hasEntry ? '<span class="dot"></span>' : ''}
+    return `<div class="cal-day${status ? ' status-' + status : ''}${isToday ? ' today' : ''}" data-date="${c.iso}">
+      ${c.day}${status ? '<span class="dot"></span>' : ''}
     </div>`;
   }).join('');
 
@@ -564,6 +589,11 @@ function renderCalendarView() {
       <button id="cal-prev">‹</button>
       <h2>${MONTHS[calMonth]} ${calYear}</h2>
       <button id="cal-next">›</button>
+    </div>
+    <div class="cal-legend">
+      <span><span class="legend-dot status-planned"></span> geplant</span>
+      <span><span class="legend-dot status-done"></span> bestätigt</span>
+      <span><span class="legend-dot status-overdue"></span> überfällig</span>
     </div>
     <div class="cal-grid">${weekdayHeader}${dayCells}</div>
     <button class="btn btn-primary" id="add-app-btn">+ Düngung erfassen</button>
@@ -594,13 +624,18 @@ function openDayDetail(iso) {
   const rows = apps.map(a => {
     const lawn = lawnById(a.lawnId);
     const fert = fertilizerById(a.fertilizerId);
+    const status = appStatus(a);
     return `
       <div class="app-entry">
         <div>
-          <strong>${escapeHtml(fert ? fert.name : '?')}</strong><br>
+          <strong>${escapeHtml(fert ? fert.name : '?')}</strong>
+          <span class="status-badge status-${status}">${appStatusLabel(status)}</span><br>
           <span class="card-sub">${escapeHtml(lawn ? lawn.name : '?')} · ${fmtNum(a.amountKg, 2)} kg</span>
         </div>
-        <button class="btn btn-danger" data-del-app="${a.id}">Löschen</button>
+        <div class="app-entry-actions">
+          <button class="btn btn-secondary" data-toggle-confirm="${a.id}">${a.confirmed ? 'Als geplant markieren' : 'Bestätigen'}</button>
+          <button class="btn btn-danger" data-del-app="${a.id}">Löschen</button>
+        </div>
       </div>`;
   }).join('');
 
@@ -622,6 +657,17 @@ function openDayDetail(iso) {
       render();
     });
   });
+  document.querySelectorAll('[data-toggle-confirm]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const app = state.applications.find(a => a.id === btn.dataset.toggleConfirm);
+      if (app) {
+        app.confirmed = !app.confirmed;
+        saveState();
+        openDayDetail(iso);
+        render();
+      }
+    });
+  });
 }
 
 function openApplicationForm(iso) {
@@ -639,6 +685,7 @@ function openApplicationForm(iso) {
   }
   const lawnOptions = state.lawns.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
   const fertOptions = state.fertilizers.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('');
+  const defaultConfirmed = iso <= isoDate(today);
 
   openModal(`
     <div class="modal-header">
@@ -674,6 +721,13 @@ function openApplicationForm(iso) {
         <input type="number" id="app-amount" required min="0.001" step="0.001" placeholder="z. B. 2.5">
       </div>
       <p class="card-sub" id="app-preview"></p>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="app-confirmed" ${defaultConfirmed ? 'checked' : ''}>
+        <span>Bereits ausgebracht (bestätigt)</span>
+      </label>
+      <p class="card-sub">Unbestätigt = geplant. In der Vergangenheit unbestätigt geplante Düngungen werden im Kalender als überfällig markiert.</p>
+
       <button type="submit" class="btn btn-primary">Speichern</button>
     </form>
   `);
@@ -691,6 +745,14 @@ function openApplicationForm(iso) {
   };
   document.getElementById('app-lawn').addEventListener('change', updatePreview);
   document.getElementById('app-amount').addEventListener('input', updatePreview);
+
+  let confirmedTouched = false;
+  document.getElementById('app-confirmed').addEventListener('change', () => { confirmedTouched = true; });
+  document.getElementById('app-date').addEventListener('change', () => {
+    if (confirmedTouched) return;
+    const dateVal = document.getElementById('app-date').value;
+    document.getElementById('app-confirmed').checked = dateVal <= isoDate(today);
+  });
 
   let calcProductKg = null;
 
@@ -752,8 +814,9 @@ function openApplicationForm(iso) {
     const lawnId = document.getElementById('app-lawn').value;
     const fertilizerId = document.getElementById('app-fert').value;
     const amountKg = parseFloat(document.getElementById('app-amount').value);
+    const confirmed = document.getElementById('app-confirmed').checked;
     if (!date || !lawnId || !fertilizerId || !amountKg || amountKg <= 0) return;
-    state.applications.push({ id: uid(), date, lawnId, fertilizerId, amountKg });
+    state.applications.push({ id: uid(), date, lawnId, fertilizerId, amountKg, confirmed });
     saveState();
     closeModal();
     toast('Düngung gespeichert');
@@ -777,30 +840,45 @@ function renderStatsView() {
   const maxYear = Math.max(...years, statsYear);
 
   const lawnBlocks = state.lawns.map(lawn => {
-    const totals = nutrientTotalsForLawnYear(lawn.id, statsYear);
+    const confirmedTotals = nutrientTotalsForLawnYear(lawn.id, statsYear, true);
+    const totals = nutrientTotalsForLawnYear(lawn.id, statsYear, false); // bestätigt + geplant
     const targets = lawn.targets || {};
     const keys = Array.from(new Set([...Object.keys(totals), ...Object.keys(targets)]));
     const noTargetVals = keys.filter(k => targets[k] === undefined).map(k => totals[k] || 0);
     const maxNoTarget = noTargetVals.length ? Math.max(...noTargetVals, 0.001) : 1;
 
     const bars = keys.length ? keys.map(k => {
-      const v = totals[k] || 0;
+      const confirmedV = confirmedTotals[k] || 0;
+      const totalV = totals[k] || 0;
+      const plannedV = Math.max(totalV - confirmedV, 0);
       const target = targets[k];
+
       if (target !== undefined) {
-        const pct = target > 0 ? Math.min((v / target) * 100, 100) : (v > 0 ? 100 : 0);
-        const over = v > target;
-        const pctLabel = target > 0 ? fmtNum((v / target) * 100, 0) : '0';
+        const over = totalV > target;
+        const confirmedPct = target > 0 ? Math.min((confirmedV / target) * 100, 100) : (confirmedV > 0 ? 100 : 0);
+        const totalPct = target > 0 ? Math.min((totalV / target) * 100, 100) : (totalV > 0 ? 100 : 0);
+        const plannedPct = Math.max(totalPct - confirmedPct, 0);
+        const pctLabel = target > 0 ? fmtNum((totalV / target) * 100, 0) : '0';
+        const plannedLabel = plannedV > 0.0005 ? ` (davon ${fmtNum(plannedV, 2)} geplant)` : '';
         return `
           <div class="nutrient-bar-row">
-            <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(v, 2)} / ${fmtNum(target, 2)} g/m² (${pctLabel}%)</span></div>
-            <div class="nutrient-bar-track"><div class="nutrient-bar-fill${over ? ' over' : ''}" style="width:${pct}%"></div></div>
+            <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(totalV, 2)} / ${fmtNum(target, 2)} g/m² (${pctLabel}%)${plannedLabel}</span></div>
+            <div class="nutrient-bar-track">
+              <div class="nutrient-bar-fill confirmed${over ? ' over' : ''}" style="width:${confirmedPct}%;left:0;"></div>
+              <div class="nutrient-bar-fill planned${over ? ' over' : ''}" style="width:${plannedPct}%;left:${confirmedPct}%;"></div>
+            </div>
           </div>`;
       }
-      const pct = (v / maxNoTarget) * 100;
+      const confirmedPct = (confirmedV / maxNoTarget) * 100;
+      const plannedPct = (plannedV / maxNoTarget) * 100;
+      const plannedLabel = plannedV > 0.0005 ? ` (davon ${fmtNum(plannedV, 2)} geplant)` : '';
       return `
         <div class="nutrient-bar-row">
-          <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(v, 2)} g/m²</span></div>
-          <div class="nutrient-bar-track"><div class="nutrient-bar-fill" style="width:${pct}%"></div></div>
+          <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(totalV, 2)} g/m²${plannedLabel}</span></div>
+          <div class="nutrient-bar-track">
+            <div class="nutrient-bar-fill confirmed" style="width:${confirmedPct}%;left:0;"></div>
+            <div class="nutrient-bar-fill planned" style="width:${plannedPct}%;left:${confirmedPct}%;"></div>
+          </div>
         </div>`;
     }).join('') : '<p class="card-sub">Keine Düngung in diesem Jahr.</p>';
 
@@ -817,6 +895,11 @@ function renderStatsView() {
       <button id="stats-prev-year" ${statsYear <= minYear ? 'disabled' : ''}>‹</button>
       <span>${statsYear}</span>
       <button id="stats-next-year" ${statsYear >= maxYear ? 'disabled' : ''}>›</button>
+    </div>
+    <div class="cal-legend">
+      <span><span class="legend-dot" style="background:var(--green-dark);"></span> bestätigt</span>
+      <span><span class="legend-dot" style="background:var(--green-light);"></span> geplant</span>
+      <span><span class="legend-dot" style="background:var(--danger);"></span> über Ziel</span>
     </div>
     ${lawnBlocks}
     <div class="export-import-row">
@@ -866,6 +949,7 @@ function doImport(e) {
         throw new Error('invalid');
       }
       if (!confirm('Import überschreibt alle aktuellen Daten. Fortfahren?')) return;
+      data.applications.forEach(a => { if (a.confirmed === undefined) a.confirmed = true; });
       state = data;
       saveState();
       toast('Import erfolgreich');

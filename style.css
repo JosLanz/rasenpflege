@@ -8,6 +8,7 @@
   --text-muted: #6b7a6c;
   --border: #e1e8df;
   --danger: #d84343;
+  --danger-light: #f7d3d3;
   --radius: 14px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -345,7 +346,9 @@ html, body {
 }
 .cal-day.other-month { opacity: 0.3; }
 .cal-day.today { border-color: var(--green-dark); border-width: 2px; }
-.cal-day.has-entry { background: var(--green-light); }
+.cal-day.status-planned { background: var(--green-light); }
+.cal-day.status-done { background: var(--green); color: #fff; }
+.cal-day.status-overdue { background: var(--danger-light); border-color: var(--danger); }
 .cal-day .dot {
   width: 5px; height: 5px;
   border-radius: 50%;
@@ -353,13 +356,65 @@ html, body {
   position: absolute;
   bottom: 5px;
 }
+.cal-day.status-overdue .dot { background: var(--danger); }
+.cal-day.status-done .dot { background: #fff; }
+
+.cal-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+.cal-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.legend-dot.status-planned { background: var(--green-light); }
+.legend-dot.status-done { background: var(--green); }
+.legend-dot.status-overdue { background: var(--danger); }
+
 .day-detail-list .app-entry {
   display: flex;
   justify-content: space-between;
-  padding: 10px 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
 .day-detail-list .app-entry:last-child { border-bottom: none; }
+.app-entry-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.app-entry-actions .btn { white-space: nowrap; font-size: 13px; padding: 8px 12px; }
+
+.status-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.status-badge.status-done { background: #e3f3e3; color: var(--green-dark); }
+.status-badge.status-planned { background: #eef6ec; color: var(--green); }
+.status-badge.status-overdue { background: var(--danger-light); color: var(--danger); }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  font-size: 15px;
+}
+.checkbox-row input { width: 20px; height: 20px; }
 
 /* Stats */
 .year-switcher {
@@ -392,15 +447,18 @@ html, body {
   background: #eef3ed;
   border-radius: 6px;
   overflow: hidden;
+  position: relative;
 }
 .nutrient-bar-fill {
   height: 100%;
   background: var(--green-dark);
-  border-radius: 6px;
+  position: absolute;
+  top: 0;
 }
-.nutrient-bar-fill.over {
-  background: var(--danger);
-}
+.nutrient-bar-fill.confirmed { background: var(--green-dark); }
+.nutrient-bar-fill.planned { background: var(--green-light); }
+.nutrient-bar-fill.confirmed.over { background: var(--danger); }
+.nutrient-bar-fill.planned.over { background: var(--danger-light); }
 
 .export-import-row {
   display: flex;
