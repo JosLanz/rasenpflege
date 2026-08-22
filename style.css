@@ -333,6 +333,9 @@ html, body {
   background: var(--green-dark);
   border-radius: 6px;
 }
+.nutrient-bar-fill.over {
+  background: var(--danger);
+}
 
 .export-import-row {
   display: flex;

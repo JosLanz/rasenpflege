@@ -124,12 +124,14 @@ function render() {
 function renderLawnsView() {
   const rows = state.lawns.map(l => {
     const appCount = state.applications.filter(a => a.lawnId === l.id).length;
+    const targetChips = Object.entries(l.targets || {}).map(([k, v]) => `<span class="chip">Ziel ${escapeHtml(k)} ${fmtNum(v, 1)} g/m²/J</span>`).join('');
     return `
       <div class="card">
         <div class="card-row">
           <div>
             <p class="card-title">${escapeHtml(l.name)}</p>
             <p class="card-sub">${fmtNum(l.sizeM2, 0)} m² · ${appCount} Düngung${appCount === 1 ? '' : 'en'}</p>
+            ${targetChips ? `<div style="margin-top:6px;">${targetChips}</div>` : ''}
           </div>
           <div class="card-row" style="gap:8px;">
             <button class="btn btn-secondary" data-edit-lawn="${l.id}">Bearbeiten</button>
@@ -148,6 +150,10 @@ function renderLawnsView() {
 
 function lawnFormHtml(lawn) {
   const isEdit = !!lawn;
+  const targets = isEdit ? { ...(lawn.targets || {}) } : {};
+  const extraTargetKeys = Object.keys(targets).filter(k => !['N', 'P', 'K'].includes(k));
+  const extraTargetRows = extraTargetKeys.map(k => targetNutrientRowHtml(k, targets[k])).join('');
+
   return `
     <div class="modal-header">
       <h2>${isEdit ? 'Rasenfläche bearbeiten' : 'Neue Rasenfläche'}</h2>
@@ -162,10 +168,45 @@ function lawnFormHtml(lawn) {
         <label>Größe (m²)</label>
         <input type="number" id="lawn-size" required min="1" step="0.1" value="${isEdit ? lawn.sizeM2 : ''}" placeholder="z. B. 120">
       </div>
+      <div class="form-group">
+        <label>Jahresziel je Nährstoff (g/m² pro Jahr, optional)</label>
+        <div class="nutrient-grid">
+          <div class="form-group">
+            <label>N</label>
+            <input type="number" step="0.1" min="0" id="target-N" value="${targets.N !== undefined ? targets.N : ''}">
+          </div>
+          <div class="form-group">
+            <label>P</label>
+            <input type="number" step="0.1" min="0" id="target-P" value="${targets.P !== undefined ? targets.P : ''}">
+          </div>
+          <div class="form-group">
+            <label>K</label>
+            <input type="number" step="0.1" min="0" id="target-K" value="${targets.K !== undefined ? targets.K : ''}">
+          </div>
+        </div>
+      </div>
+      <div id="target-extra-nutrients">${extraTargetRows}</div>
+      <button type="button" class="btn btn-secondary" id="add-target-nutrient-btn" style="width:100%;margin-bottom:16px;">+ Weiteres Nährstoffziel hinzufügen</button>
       <button type="submit" class="btn btn-primary">Speichern</button>
       ${isEdit ? `<button type="button" class="btn btn-danger" id="delete-lawn-btn" style="width:100%;margin-top:10px;">Löschen</button>` : ''}
     </form>
   `;
+}
+
+function targetNutrientRowHtml(key = '', val = '') {
+  const rowId = uid();
+  return `
+    <div class="extra-nutrient-row" data-row-id="${rowId}">
+      <div class="form-group">
+        <label>Nährstoff</label>
+        <input type="text" class="target-extra-key" placeholder="z. B. Mg" value="${escapeAttr(key)}">
+      </div>
+      <div class="form-group">
+        <label>g/m²/Jahr</label>
+        <input type="number" step="0.1" min="0" class="target-extra-val" value="${val}">
+      </div>
+      <button type="button" class="remove-nutrient-btn" data-remove-row="${rowId}">✕</button>
+    </div>`;
 }
 
 function bindLawnsEvents() {
@@ -185,16 +226,44 @@ function bindLawnsEvents() {
 
 function bindLawnFormEvents(lawn) {
   document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+
+  const bindRemoveButtons = () => {
+    document.querySelectorAll('[data-remove-row]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelector(`[data-row-id="${btn.dataset.removeRow}"]`).remove();
+      });
+    });
+  };
+  bindRemoveButtons();
+
+  document.getElementById('add-target-nutrient-btn').addEventListener('click', () => {
+    document.getElementById('target-extra-nutrients').insertAdjacentHTML('beforeend', targetNutrientRowHtml());
+    bindRemoveButtons();
+  });
+
   document.getElementById('lawn-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const name = document.getElementById('lawn-name').value.trim();
     const sizeM2 = parseFloat(document.getElementById('lawn-size').value);
     if (!name || !sizeM2 || sizeM2 <= 0) return;
+
+    const targets = {};
+    ['N', 'P', 'K'].forEach(k => {
+      const raw = document.getElementById(`target-${k}`).value;
+      if (raw !== '') targets[k] = parseFloat(raw) || 0;
+    });
+    document.querySelectorAll('#target-extra-nutrients .extra-nutrient-row').forEach(row => {
+      const key = row.querySelector('.target-extra-key').value.trim();
+      const val = row.querySelector('.target-extra-val').value;
+      if (key && val !== '') targets[key] = parseFloat(val) || 0;
+    });
+
     if (lawn) {
       lawn.name = name;
       lawn.sizeM2 = sizeM2;
+      lawn.targets = targets;
     } else {
-      state.lawns.push({ id: uid(), name, sizeM2 });
+      state.lawns.push({ id: uid(), name, sizeM2, targets });
     }
     saveState();
     closeModal();
@@ -559,13 +628,31 @@ function renderStatsView() {
 
   const lawnBlocks = state.lawns.map(lawn => {
     const totals = nutrientTotalsForLawnYear(lawn.id, statsYear);
-    const entries = Object.entries(totals);
-    const max = entries.length ? Math.max(...entries.map(([, v]) => v), 0.001) : 1;
-    const bars = entries.length ? entries.map(([k, v]) => `
-      <div class="nutrient-bar-row">
-        <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(v, 2)} g/m²</span></div>
-        <div class="nutrient-bar-track"><div class="nutrient-bar-fill" style="width:${(v / max) * 100}%"></div></div>
-      </div>`).join('') : '<p class="card-sub">Keine Düngung in diesem Jahr.</p>';
+    const targets = lawn.targets || {};
+    const keys = Array.from(new Set([...Object.keys(totals), ...Object.keys(targets)]));
+    const noTargetVals = keys.filter(k => targets[k] === undefined).map(k => totals[k] || 0);
+    const maxNoTarget = noTargetVals.length ? Math.max(...noTargetVals, 0.001) : 1;
+
+    const bars = keys.length ? keys.map(k => {
+      const v = totals[k] || 0;
+      const target = targets[k];
+      if (target !== undefined) {
+        const pct = target > 0 ? Math.min((v / target) * 100, 100) : (v > 0 ? 100 : 0);
+        const over = v > target;
+        const pctLabel = target > 0 ? fmtNum((v / target) * 100, 0) : '0';
+        return `
+          <div class="nutrient-bar-row">
+            <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(v, 2)} / ${fmtNum(target, 2)} g/m² (${pctLabel}%)</span></div>
+            <div class="nutrient-bar-track"><div class="nutrient-bar-fill${over ? ' over' : ''}" style="width:${pct}%"></div></div>
+          </div>`;
+      }
+      const pct = (v / maxNoTarget) * 100;
+      return `
+        <div class="nutrient-bar-row">
+          <div class="nutrient-bar-label"><span>${escapeHtml(k)}</span><span>${fmtNum(v, 2)} g/m²</span></div>
+          <div class="nutrient-bar-track"><div class="nutrient-bar-fill" style="width:${pct}%"></div></div>
+        </div>`;
+    }).join('') : '<p class="card-sub">Keine Düngung in diesem Jahr.</p>';
 
     return `
       <div class="card">
