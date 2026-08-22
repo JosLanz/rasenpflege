@@ -28,6 +28,17 @@ function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
+/* Speichert einen kompletten neuen State nur, wenn er in den Speicher passt (z. B. bei Datenblatt-Uploads). */
+function trySaveState(newState) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newState));
+    state = newState;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
@@ -296,6 +307,7 @@ function renderFertilizersView() {
           </div>
           <button class="btn btn-secondary" data-edit-fert="${f.id}">Bearbeiten</button>
         </div>
+        ${f.datasheet ? `<button type="button" class="btn btn-secondary" data-open-datasheet="${f.id}" style="width:100%;margin-top:10px;">📄 Datenblatt öffnen</button>` : ''}
       </div>`;
   }).join('');
 
@@ -343,10 +355,40 @@ function fertilizerFormHtml(fert) {
       </div>
       <div id="extra-nutrients">${extraRows}</div>
       <button type="button" class="btn btn-secondary" id="add-nutrient-btn" style="width:100%;margin-bottom:16px;">+ Weiteren Nährstoff hinzufügen</button>
+
+      <div class="form-group">
+        <label>Datenblatt (PDF oder Foto, optional)</label>
+        <div id="datasheet-current">${isEdit && fert.datasheet ? datasheetChipHtml(fert.datasheet.name) : ''}</div>
+        <input type="file" id="fert-datasheet-input" accept="application/pdf,image/*">
+        <p class="card-sub">Wird lokal auf dem Gerät gespeichert (max. ca. 3 MB).</p>
+      </div>
+
       <button type="submit" class="btn btn-primary">Speichern</button>
       ${isEdit ? `<button type="button" class="btn btn-danger" id="delete-fert-btn" style="width:100%;margin-top:10px;">Löschen</button>` : ''}
     </form>
   `;
+}
+
+function datasheetChipHtml(name) {
+  return `<div class="datasheet-chip"><span>📄 ${escapeHtml(name)}</span><button type="button" id="remove-datasheet-btn" class="chip-remove-btn">✕</button></div>`;
+}
+
+/* data:-URL (aus FileReader) in ein Blob umwandeln, um es z. B. per window.open anzuzeigen */
+function dataUrlToBlob(dataUrl) {
+  const [meta, b64] = dataUrl.split(',');
+  const mime = (meta.match(/data:(.*?);base64/) || [])[1] || 'application/octet-stream';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+function openDatasheet(fertId) {
+  const fert = fertilizerById(fertId);
+  if (!fert || !fert.datasheet) return;
+  const url = URL.createObjectURL(dataUrlToBlob(fert.datasheet.dataUrl));
+  window.open(url, '_blank');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function extraNutrientRowHtml(key = '', val = '') {
@@ -378,6 +420,9 @@ function bindFertilizersEvents() {
       bindFertFormEvents(fert);
     });
   });
+  document.querySelectorAll('[data-open-datasheet]').forEach(btn => {
+    btn.addEventListener('click', () => openDatasheet(btn.dataset.openDatasheet));
+  });
 }
 
 function bindFertFormEvents(fert) {
@@ -397,6 +442,37 @@ function bindFertFormEvents(fert) {
     bindRemoveButtons();
   });
 
+  let pendingDatasheet = null;
+  let removeDatasheet = false;
+
+  const bindRemoveDatasheetBtn = () => {
+    const btn = document.getElementById('remove-datasheet-btn');
+    if (btn) btn.addEventListener('click', () => {
+      pendingDatasheet = null;
+      removeDatasheet = true;
+      document.getElementById('datasheet-current').innerHTML = '';
+    });
+  };
+  bindRemoveDatasheetBtn();
+
+  document.getElementById('fert-datasheet-input').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      toast('Datei zu groß (max. ca. 3 MB)');
+      e.target.value = '';
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      pendingDatasheet = { name: file.name, type: file.type, dataUrl: reader.result };
+      removeDatasheet = false;
+      document.getElementById('datasheet-current').innerHTML = datasheetChipHtml(file.name);
+      bindRemoveDatasheetBtn();
+    };
+    reader.readAsDataURL(file);
+  });
+
   document.getElementById('fert-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const name = document.getElementById('fert-name').value.trim();
@@ -412,16 +488,25 @@ function bindFertFormEvents(fert) {
       if (key && val !== '') nutrients[key] = parseFloat(val) || 0;
     });
 
-    if (fert) {
-      fert.name = name;
-      fert.nutrients = nutrients;
+    let datasheet = fert ? fert.datasheet : undefined;
+    if (removeDatasheet) datasheet = undefined;
+    if (pendingDatasheet) datasheet = pendingDatasheet;
+
+    const updatedFert = fert
+      ? { ...fert, name, nutrients, datasheet }
+      : { id: uid(), name, nutrients, datasheet };
+    const newFertilizers = fert
+      ? state.fertilizers.map(f => f.id === fert.id ? updatedFert : f)
+      : [...state.fertilizers, updatedFert];
+    const newState = { ...state, fertilizers: newFertilizers };
+
+    if (trySaveState(newState)) {
+      closeModal();
+      toast('Gespeichert');
+      render();
     } else {
-      state.fertilizers.push({ id: uid(), name, nutrients });
+      toast('Speichern fehlgeschlagen — Datenblatt vermutlich zu groß für den Speicher.');
     }
-    saveState();
-    closeModal();
-    toast('Gespeichert');
-    render();
   });
 
   const delBtn = document.getElementById('delete-fert-btn');

@@ -233,6 +233,37 @@ html, body {
   font-size: 16px;
 }
 
+.datasheet-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #eef3ed;
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+.datasheet-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 8px;
+}
+.chip-remove-btn {
+  background: #fdeaea;
+  color: var(--danger);
+  border: none;
+  border-radius: 50%;
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+#fert-datasheet-input {
+  width: 100%;
+  font-size: 14px;
+}
+
 /* Modal */
 .modal-backdrop {
   position: fixed;
