@@ -830,8 +830,20 @@ function openApplicationForm(iso) {
 /* ================= STATS ================= */
 
 function renderStatsView() {
+  const backupCard = `
+    <div class="card">
+      <p class="card-title">Daten sichern & übertragen</p>
+      <p class="card-sub">Alle Rasenflächen, Dünger (inkl. Datenblätter) und Kalendereinträge als Datei exportieren — z. B. um sie in einem anderen Browser oder auf einem anderen Gerät zu importieren.</p>
+      <div class="export-import-row">
+        <button class="btn btn-secondary" id="export-btn">⬇️ Export (JSON)</button>
+        <button class="btn btn-secondary" id="import-btn">⬆️ Import (JSON)</button>
+      </div>
+    </div>
+    <input type="file" id="import-file" accept="application/json" style="display:none;">
+  `;
+
   if (!state.lawns.length) {
-    return emptyState('📊', 'Lege zuerst eine Rasenfläche an, um Statistiken zu sehen.');
+    return emptyState('📊', 'Lege zuerst eine Rasenfläche an, um Statistiken zu sehen.') + backupCard;
   }
 
   const years = new Set(state.applications.map(a => new Date(a.date + 'T00:00:00').getFullYear()));
@@ -902,11 +914,7 @@ function renderStatsView() {
       <span><span class="legend-dot" style="background:var(--danger);"></span> über Ziel</span>
     </div>
     ${lawnBlocks}
-    <div class="export-import-row">
-      <button class="btn btn-secondary" id="export-btn">Export (JSON)</button>
-      <button class="btn btn-secondary" id="import-btn">Import (JSON)</button>
-    </div>
-    <input type="file" id="import-file" accept="application/json" style="display:none;">
+    ${backupCard}
   `;
 }
 
