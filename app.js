@@ -633,6 +633,7 @@ function openDayDetail(iso) {
           <span class="card-sub">${escapeHtml(lawn ? lawn.name : '?')} · ${fmtNum(a.amountKg, 2)} kg</span>
         </div>
         <div class="app-entry-actions">
+          <button class="btn btn-secondary" data-edit-app="${a.id}">Bearbeiten</button>
           <button class="btn btn-secondary" data-toggle-confirm="${a.id}">${a.confirmed ? 'Als geplant markieren' : 'Bestätigen'}</button>
           <button class="btn btn-danger" data-del-app="${a.id}">Löschen</button>
         </div>
@@ -649,6 +650,12 @@ function openDayDetail(iso) {
   `);
   document.getElementById('modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('add-app-for-day-btn').addEventListener('click', () => openApplicationForm(iso));
+  document.querySelectorAll('[data-edit-app]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const app = state.applications.find(a => a.id === btn.dataset.editApp);
+      if (app) openApplicationForm(iso, app);
+    });
+  });
   document.querySelectorAll('[data-del-app]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.applications = state.applications.filter(a => a.id !== btn.dataset.delApp);
@@ -670,7 +677,7 @@ function openDayDetail(iso) {
   });
 }
 
-function openApplicationForm(iso) {
+function openApplicationForm(iso, editApp = null) {
   if (!state.lawns.length) {
     closeModal();
     toast('Bitte zuerst eine Rasenfläche anlegen');
@@ -683,19 +690,21 @@ function openApplicationForm(iso) {
     switchView('fertilizers');
     return;
   }
+  const isEdit = !!editApp;
   const lawnOptions = state.lawns.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
   const fertOptions = state.fertilizers.map(f => `<option value="${f.id}">${escapeHtml(f.name)}</option>`).join('');
-  const defaultConfirmed = iso <= isoDate(today);
+  const dateVal = isEdit ? editApp.date : iso;
+  const defaultConfirmed = isEdit ? editApp.confirmed : dateVal <= isoDate(today);
 
   openModal(`
     <div class="modal-header">
-      <h2>Düngung erfassen</h2>
+      <h2>${isEdit ? 'Düngung bearbeiten' : 'Düngung erfassen'}</h2>
       <button class="modal-close" id="modal-close-btn">✕</button>
     </div>
     <form id="app-form">
       <div class="form-group">
         <label>Datum</label>
-        <input type="date" id="app-date" required value="${iso}">
+        <input type="date" id="app-date" required value="${dateVal}">
       </div>
       <div class="form-group">
         <label>Rasenfläche</label>
@@ -718,7 +727,7 @@ function openApplicationForm(iso) {
 
       <div class="form-group">
         <label>Menge (kg Produkt gesamt)</label>
-        <input type="number" id="app-amount" required min="0.001" step="0.001" placeholder="z. B. 2.5">
+        <input type="number" id="app-amount" required min="0.001" step="0.001" placeholder="z. B. 2.5" value="${isEdit ? editApp.amountKg : ''}">
       </div>
       <p class="card-sub" id="app-preview"></p>
 
@@ -729,9 +738,23 @@ function openApplicationForm(iso) {
       <p class="card-sub">Unbestätigt = geplant. In der Vergangenheit unbestätigt geplante Düngungen werden im Kalender als überfällig markiert.</p>
 
       <button type="submit" class="btn btn-primary">Speichern</button>
+      ${isEdit ? `<button type="button" class="btn btn-danger" id="delete-app-btn" style="width:100%;margin-top:10px;">Löschen</button>` : ''}
     </form>
   `);
   document.getElementById('modal-close-btn').addEventListener('click', closeModal);
+
+  if (isEdit) {
+    document.getElementById('app-lawn').value = editApp.lawnId;
+    document.getElementById('app-fert').value = editApp.fertilizerId;
+    document.getElementById('delete-app-btn').addEventListener('click', () => {
+      if (!confirm('Diese Düngung wirklich löschen?')) return;
+      state.applications = state.applications.filter(a => a.id !== editApp.id);
+      saveState();
+      closeModal();
+      toast('Gelöscht');
+      render();
+    });
+  }
 
   const updatePreview = () => {
     const lawn = lawnById(document.getElementById('app-lawn').value);
@@ -745,8 +768,9 @@ function openApplicationForm(iso) {
   };
   document.getElementById('app-lawn').addEventListener('change', updatePreview);
   document.getElementById('app-amount').addEventListener('input', updatePreview);
+  updatePreview();
 
-  let confirmedTouched = false;
+  let confirmedTouched = isEdit;
   document.getElementById('app-confirmed').addEventListener('change', () => { confirmedTouched = true; });
   document.getElementById('app-date').addEventListener('change', () => {
     if (confirmedTouched) return;
@@ -816,7 +840,15 @@ function openApplicationForm(iso) {
     const amountKg = parseFloat(document.getElementById('app-amount').value);
     const confirmed = document.getElementById('app-confirmed').checked;
     if (!date || !lawnId || !fertilizerId || !amountKg || amountKg <= 0) return;
-    state.applications.push({ id: uid(), date, lawnId, fertilizerId, amountKg, confirmed });
+    if (isEdit) {
+      editApp.date = date;
+      editApp.lawnId = lawnId;
+      editApp.fertilizerId = fertilizerId;
+      editApp.amountKg = amountKg;
+      editApp.confirmed = confirmed;
+    } else {
+      state.applications.push({ id: uid(), date, lawnId, fertilizerId, amountKg, confirmed });
+    }
     saveState();
     closeModal();
     toast('Düngung gespeichert');
