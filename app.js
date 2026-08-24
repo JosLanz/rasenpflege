@@ -934,6 +934,38 @@ function renderStatsView() {
       </div>`;
   }).join('');
 
+  const fertTotals = {};
+  state.applications.forEach(a => {
+    if (new Date(a.date + 'T00:00:00').getFullYear() !== statsYear) return;
+    const t = fertTotals[a.fertilizerId] || (fertTotals[a.fertilizerId] = { confirmed: 0, planned: 0 });
+    if (a.confirmed) t.confirmed += a.amountKg; else t.planned += a.amountKg;
+  });
+  const usedFerts = state.fertilizers.filter(f => fertTotals[f.id]);
+  const maxFertTotal = usedFerts.length
+    ? Math.max(...usedFerts.map(f => fertTotals[f.id].confirmed + fertTotals[f.id].planned), 0.001)
+    : 1;
+
+  const fertConsumptionCard = `
+    <div class="card">
+      <p class="card-title">Düngerverbrauch ${statsYear}</p>
+      ${usedFerts.length ? usedFerts.map(f => {
+        const t = fertTotals[f.id];
+        const total = t.confirmed + t.planned;
+        const confirmedPct = (t.confirmed / maxFertTotal) * 100;
+        const plannedPct = (t.planned / maxFertTotal) * 100;
+        return `
+          <div class="nutrient-bar-row">
+            <div class="nutrient-bar-label"><span>${escapeHtml(f.name)}</span><span>${fmtNum(t.confirmed, 2)} kg verbraucht${t.planned > 0.0005 ? ` · ${fmtNum(t.planned, 2)} kg noch geplant` : ''}</span></div>
+            <div class="nutrient-bar-track">
+              <div class="nutrient-bar-fill confirmed" style="width:${confirmedPct}%;left:0;"></div>
+              <div class="nutrient-bar-fill planned" style="width:${plannedPct}%;left:${confirmedPct}%;"></div>
+            </div>
+            <p class="card-sub" style="margin-top:2px;">Gesamt ${statsYear}: ${fmtNum(total, 2)} kg</p>
+          </div>`;
+      }).join('') : `<p class="card-sub">Keine Düngungen in ${statsYear}.</p>`}
+    </div>
+  `;
+
   return `
     <div class="year-switcher">
       <button id="stats-prev-year" ${statsYear <= minYear ? 'disabled' : ''}>‹</button>
@@ -941,11 +973,12 @@ function renderStatsView() {
       <button id="stats-next-year" ${statsYear >= maxYear ? 'disabled' : ''}>›</button>
     </div>
     <div class="cal-legend">
-      <span><span class="legend-dot" style="background:var(--green-dark);"></span> bestätigt</span>
+      <span><span class="legend-dot" style="background:var(--green-dark);"></span> bestätigt / verbraucht</span>
       <span><span class="legend-dot" style="background:var(--green-light);"></span> geplant</span>
       <span><span class="legend-dot" style="background:var(--danger);"></span> über Ziel</span>
     </div>
     ${lawnBlocks}
+    ${fertConsumptionCard}
     ${backupCard}
   `;
 }
