@@ -74,6 +74,29 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.add('hidden'), 2200);
 }
 
+function fmtMoney(v) {
+  return `${fmtNum(v, 2)} €`;
+}
+
+/* Kosten (€) einer Rasenfläche in einem Jahr, aufgeteilt in verbraucht (bestätigt) / geplant.
+   Düngungen mit Dünger ohne hinterlegten Preis fließen nicht ein (hasUnpriced markiert das). */
+function lawnCostForYear(lawnId, year) {
+  let confirmed = 0, planned = 0, hasPriced = false, hasUnpriced = false;
+  state.applications.forEach(a => {
+    if (a.lawnId !== lawnId || new Date(a.date + 'T00:00:00').getFullYear() !== year) return;
+    const fert = fertilizerById(a.fertilizerId);
+    if (!fert) return;
+    if (fert.pricePerKg) {
+      hasPriced = true;
+      const cost = a.amountKg * fert.pricePerKg;
+      if (a.confirmed) confirmed += cost; else planned += cost;
+    } else {
+      hasUnpriced = true;
+    }
+  });
+  return { confirmed, planned, hasPriced, hasUnpriced };
+}
+
 /* g Produkt pro m² für eine Anwendung */
 function productGPerM2(app) {
   const lawn = lawnById(app.lawnId);
@@ -323,12 +346,13 @@ function bindLawnFormEvents(lawn) {
 function renderFertilizersView() {
   const rows = state.fertilizers.map(f => {
     const chips = Object.entries(f.nutrients || {}).map(([k, v]) => `<span class="chip">${escapeHtml(k)} ${fmtNum(v, 1)}%</span>`).join('');
+    const priceChip = f.pricePerKg ? `<span class="chip">${fmtNum(f.pricePerKg, 2)} €/kg</span>` : '';
     return `
       <div class="card">
         <div class="card-row">
           <div>
             <p class="card-title">${escapeHtml(f.name)}</p>
-            <div>${chips}</div>
+            <div>${chips}${priceChip}</div>
           </div>
           <button class="btn btn-secondary" data-edit-fert="${f.id}">Bearbeiten</button>
         </div>
@@ -380,6 +404,12 @@ function fertilizerFormHtml(fert) {
       </div>
       <div id="extra-nutrients">${extraRows}</div>
       <button type="button" class="btn btn-secondary" id="add-nutrient-btn" style="width:100%;margin-bottom:16px;">+ Weiteren Nährstoff hinzufügen</button>
+
+      <div class="form-group">
+        <label>Preis (€ pro kg, optional)</label>
+        <input type="number" id="fert-price" min="0" step="0.01" placeholder="z. B. 4.90" value="${isEdit && fert.pricePerKg ? fert.pricePerKg : ''}">
+        <p class="card-sub">Wird in der Statistik zur Kostenberechnung genutzt.</p>
+      </div>
 
       <div class="form-group">
         <label>Datenblatt (PDF oder Foto, optional)</label>
@@ -517,9 +547,12 @@ function bindFertFormEvents(fert) {
     if (removeDatasheet) datasheet = undefined;
     if (pendingDatasheet) datasheet = pendingDatasheet;
 
+    const priceRaw = document.getElementById('fert-price').value;
+    const pricePerKg = priceRaw !== '' ? parseFloat(priceRaw) || 0 : undefined;
+
     const updatedFert = fert
-      ? { ...fert, name, nutrients, datasheet }
-      : { id: uid(), name, nutrients, datasheet };
+      ? { ...fert, name, nutrients, datasheet, pricePerKg }
+      : { id: uid(), name, nutrients, datasheet, pricePerKg };
     const newFertilizers = fert
       ? state.fertilizers.map(f => f.id === fert.id ? updatedFert : f)
       : [...state.fertilizers, updatedFert];
@@ -926,11 +959,19 @@ function renderStatsView() {
         </div>`;
     }).join('') : '<p class="card-sub">Keine Düngung in diesem Jahr.</p>';
 
+    const cost = lawnCostForYear(lawn.id, statsYear);
+    const costLine = cost.hasPriced ? `
+      <p class="card-sub" style="margin-top:8px;">
+        💶 ${fmtMoney(cost.confirmed)} verbraucht${cost.planned > 0.005 ? ` + ${fmtMoney(cost.planned)} geplant = ${fmtMoney(cost.confirmed + cost.planned)} gesamt` : ''}
+        ${cost.hasUnpriced ? ' (unvollständig, nicht alle verwendeten Dünger haben einen Preis)' : ''}
+      </p>` : '';
+
     return `
       <div class="card">
         <p class="card-title">${escapeHtml(lawn.name)}</p>
         <p class="card-sub">${fmtNum(lawn.sizeM2, 0)} m²</p>
         <div style="margin-top:10px;">${bars}</div>
+        ${costLine}
       </div>`;
   }).join('');
 
@@ -945,14 +986,34 @@ function renderStatsView() {
     ? Math.max(...usedFerts.map(f => fertTotals[f.id].confirmed + fertTotals[f.id].planned), 0.001)
     : 1;
 
+  let totalCostConfirmed = 0, totalCostPlanned = 0, anyFertPriced = false, anyFertUnpriced = false;
+  usedFerts.forEach(f => {
+    const t = fertTotals[f.id];
+    if (f.pricePerKg) {
+      anyFertPriced = true;
+      totalCostConfirmed += t.confirmed * f.pricePerKg;
+      totalCostPlanned += t.planned * f.pricePerKg;
+    } else {
+      anyFertUnpriced = true;
+    }
+  });
+  const totalCostLine = anyFertPriced ? `
+    <p class="card-sub" style="margin-bottom:12px;">
+      💶 Gesamtkosten: ${fmtMoney(totalCostConfirmed)} verbraucht${totalCostPlanned > 0.005 ? ` + ${fmtMoney(totalCostPlanned)} geplant = ${fmtMoney(totalCostConfirmed + totalCostPlanned)} gesamt` : ''}
+      ${anyFertUnpriced ? ' (unvollständig, nicht bei jedem Dünger ist ein Preis hinterlegt)' : ''}
+    </p>` : '';
+
   const fertConsumptionCard = `
     <div class="card">
       <p class="card-title">Düngerverbrauch ${statsYear}</p>
+      ${totalCostLine}
       ${usedFerts.length ? usedFerts.map(f => {
         const t = fertTotals[f.id];
         const total = t.confirmed + t.planned;
         const confirmedPct = (t.confirmed / maxFertTotal) * 100;
         const plannedPct = (t.planned / maxFertTotal) * 100;
+        const costLine = f.pricePerKg ? `
+          <p class="card-sub">💶 ${fmtMoney(t.confirmed * f.pricePerKg)} verbraucht${t.planned > 0.0005 ? ` + ${fmtMoney(t.planned * f.pricePerKg)} geplant = ${fmtMoney(total * f.pricePerKg)} gesamt` : ''}</p>` : '';
         return `
           <div class="nutrient-bar-row">
             <div class="nutrient-bar-label"><span>${escapeHtml(f.name)}</span><span>${fmtNum(t.confirmed, 2)} kg verbraucht${t.planned > 0.0005 ? ` · ${fmtNum(t.planned, 2)} kg noch geplant` : ''}</span></div>
@@ -961,6 +1022,7 @@ function renderStatsView() {
               <div class="nutrient-bar-fill planned" style="width:${plannedPct}%;left:${confirmedPct}%;"></div>
             </div>
             <p class="card-sub" style="margin-top:2px;">Gesamt ${statsYear}: ${fmtNum(total, 2)} kg</p>
+            ${costLine}
           </div>`;
       }).join('') : `<p class="card-sub">Keine Düngungen in ${statsYear}.</p>`}
     </div>
